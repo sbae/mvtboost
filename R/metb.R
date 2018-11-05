@@ -39,6 +39,7 @@
 #' @param mc.cores number of parallel cores
 #' @param num_threads number of threads
 #' @param verbose In the final model fit, will print every `10` trees/iterations.
+#' @param response If \code{"binary"} then performs binary classification using negative log loss.
 #' @param ... arguments passed to gbm.fit
 #' @return An \code{metb} object consisting of the following list elements:
 #' \describe{
@@ -79,7 +80,8 @@ metb <- function(y, X, id,
                       save.mods=FALSE,
                       mc.cores=1, 
                       num_threads=1,
-                      verbose = TRUE, ...){
+                      verbose = TRUE, 
+                      response = "Gaussian", ...){
 
   n <- length(y)
   X <- as.data.frame(X)
@@ -125,13 +127,13 @@ metb <- function(y, X, id,
         try(do.call(metb_cv, append(args, list(...))))
       }, y=y, x=X, id=id, train=train, folds=folds, 
         bag.fraction=bag.fraction,  
-        verbose=FALSE, save.mods=save.mods, mc.cores = mc.cores)
+        verbose=FALSE, save.mods=save.mods, mc.cores = mc.cores, response = response)
     } else {
       cv.mods <- parallel::mclapply(conds.ls, function(args, ...){ 
         try(do.call(metb_cv, append(args, list(...))))
       }, y=y, x=X, id=id, train=train, folds=folds, 
       bag.fraction=bag.fraction,  
-      verbose=FALSE, save.mods=save.mods, mc.cores = mc.cores)
+      verbose=FALSE, save.mods=save.mods, mc.cores = mc.cores, response = response)
     }
 
     # average over cv folds for each condition
@@ -161,7 +163,8 @@ metb <- function(y, X, id,
           interaction.depth=best.params$interaction.depth, 
           indep = best.params$indep,
           n.minobsinnode = best.params$n.minobsinnode,
-          num_threads=num_threads)
+          num_threads=num_threads,
+          response = response)
     
   } else { # cv.folds = 1
     cv.err <- rep(NA, n.trees)
@@ -180,7 +183,9 @@ metb <- function(y, X, id,
                        indep = indep, 
                        n.minobsinnode = n.minobsinnode,
                        num_threads = num_threads,
-                       verbose = verbose, save.mods=save.mods)
+                       verbose = verbose, 
+                       save.mods=save.mods,
+                       response = response)
   }
   if(all(is.na(o$test.err))){ 
     best_test_err <- NA
@@ -230,7 +235,8 @@ metb.fit <- function(y, X, id,
                           indep=TRUE, 
                           num_threads=1,
                           save.mods=FALSE,
-                          verbose = TRUE, ...){
+                          verbose = TRUE, 
+                          response, ...){
 
   n <- length(y)
   
@@ -369,16 +375,30 @@ metb.fit <- function(y, X, id,
       yhat[,i]   <- yhat[,i-1]  + yhatm  * shrinkage
     }
     
-    r <- r - yhatm * shrinkage
-    
-    if(i==1){ 
-      train.err[i] <- mean((y[s] - init)^2)
-      oob.err[i]   <- mean((y[s.oob] - init)^2)
-      test.err[i]  <- mean((y[-train] - init)^2)
+    if(response == "binary") {
+      r <- y - 1/(1+exp(-yhat[,i]))
+      
+      LogLoss = function(actual, predicted, eps = 1e-15) {
+                        predicted = pmin(pmax(predicted, eps), 1-eps)
+                        - (sum(actual * log(predicted) + (1 - actual) * log(1 - predicted))) / length(actual)
+                      }
+      train.err[i] <- LogLoss(y[s], invlogit(yhat[s,i]))
+      oob.err[i]   <- LogLoss(y[s.oob], invlogit(yhat[s.oob,i]))
+      test.err[i]  <- LogLoss(y[-train], invlogit(yhat[-train,i]))     
     }
-    train.err[i] <- mean((yhat[s,i] - (y[s] - init))^2)
-    oob.err[i]   <- mean((yhat[s.oob,i] - (y[s.oob] - init))^2)
-    test.err[i]  <- mean((yhat[-train,i] - (y[-train] - init))^2)
+
+    else {
+      r <- r - yhatm * shrinkage
+      
+      if(i==1){ 
+        train.err[i] <- mean((y[s] - init)^2)
+        oob.err[i]   <- mean((y[s.oob] - init)^2)
+        test.err[i]  <- mean((y[-train] - init)^2)
+      }
+      train.err[i] <- mean((yhat[s,i] - (y[s] - init))^2)
+      oob.err[i]   <- mean((yhat[s.oob,i] - (y[s.oob] - init))^2)
+      test.err[i]  <- mean((yhat[-train,i] - (y[-train] - init))^2)     
+    }
     if(verbose) setTxtProgressBar(pb, i)
     
     # 2016-10-19: This was removed because it can stop too early and becomes 
