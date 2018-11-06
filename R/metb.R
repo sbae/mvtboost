@@ -407,8 +407,11 @@ metb.fit <- function(y, X, id,
     #  break;
     #}
   }
-  yhat <- yhat + init
-  fixed <- fixed + init
+  #### For binary response, no need to add init to yhat.
+  if(response != "binary") {
+    yhat <- yhat + init
+    fixed <- fixed + init
+  }
   if(!save.mods) mods <- NULL # so you can test for it
   
   out <- list(yhat=yhat, ranef=ranef, fixed=fixed, shrinkage=shrinkage, 
